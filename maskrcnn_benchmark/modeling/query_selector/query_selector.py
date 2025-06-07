@@ -21,7 +21,7 @@ class QuerySelector(nn.Module):
                 query_dim = query_bank[list(query_bank.keys())[0]].shape[-1]
             else:
                 # add qv_layer to name only for easier parameter freezing
-                self.query_bank = torch.load(cfg.VISION_QUERY.QUERY_BANK_PATH, map_location=self.device) # default dict: num_classes [num_queries, num_scales, num_channels ]
+                self.query_bank = torch.load(cfg.VISION_QUERY.QUERY_BANK_PATH, map_location=self.device, weights_only=False) # default dict: num_classes [num_queries, num_scales, num_channels ]
                 query_dim = self.query_bank[list(self.query_bank.keys())[0]].shape[-1]
         if cfg.VISION_QUERY.ADD_VISION_LAYER:
             self.tunable_vision_linear = torch.nn.Linear(query_dim, 1000, bias=False)

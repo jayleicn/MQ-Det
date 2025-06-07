@@ -19,7 +19,7 @@ from maskrcnn_benchmark.utils.comm import synchronize, get_rank
 from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir
 from maskrcnn_benchmark.utils.stats import get_model_complexity_info
- 
+
 import os
 import functools
 import io

@@ -13,9 +13,9 @@ from collections import OrderedDict
 
 from transformers.models.bert.modeling_bert import BertModel, BertEncoder, BertEmbeddings,\
 BaseModelOutputWithPastAndCrossAttentions, BaseModelOutputWithPoolingAndCrossAttentions,\
-logger, \
-add_start_docstrings_to_model_forward, add_code_sample_docstrings, \
-BERT_INPUTS_DOCSTRING, _CHECKPOINT_FOR_DOC, _CONFIG_FOR_DOC
+logger
+# add_start_docstrings_to_model_forward, add_code_sample_docstrings, \
+# BERT_INPUTS_DOCSTRING, _CHECKPOINT_FOR_DOC, _CONFIG_FOR_DOC
 
 
 # import torch.nn.utils.rnn as rnn_utils
@@ -681,12 +681,12 @@ class QVBertModel(BertModel):
                 ff_gates.append(blk.ff_gate)
         return {'attn_gates': attn_gates, 'ffn_gates': ff_gates}
 
-    @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
-    @add_code_sample_docstrings(
-        checkpoint=_CHECKPOINT_FOR_DOC,
-        output_type=BaseModelOutputWithPoolingAndCrossAttentions,
-        config_class=_CONFIG_FOR_DOC,
-    )
+    # @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
+    # @add_code_sample_docstrings(
+    #     checkpoint=_CHECKPOINT_FOR_DOC,
+    #     output_type=BaseModelOutputWithPoolingAndCrossAttentions,
+    #     config_class=_CONFIG_FOR_DOC,
+    # )
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,

@@ -5,9 +5,11 @@ MODEL/
 OUTPUT/
 .vscode/
 *.egg-info/
+.ipynb_checkpoints/
 *gnu.so
 logs/
 odinw-img-logs/
 other_log/
 vs_downstream_log/
 vs_final_downstream_log/
+OUTPUT_EXTRACT_LVIS_VISUAL_QUERY/
