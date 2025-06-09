@@ -1,8 +1,10 @@
 from .generalized_vl_rcnn_new import GeneralizedVLRCNN_New
+from .generalized_vl_rcnn import GeneralizedVLRCNN
 from groundingdino_new.models import build_model
 
 _DETECTION_META_ARCHITECTURES = {
                                  "GeneralizedVLRCNN_New": GeneralizedVLRCNN_New,
+                                 "GeneralizedVLRCNN": GeneralizedVLRCNN,
                                  }
 
 

@@ -46,7 +46,6 @@ class QuerySelector(nn.Module):
         '''
         if self.query_bank is None:
             return None, None, None
-
         batched_queries = []
         batched_queries_attn_mask = []
         batched_has_vision_query = []
@@ -55,6 +54,11 @@ class QuerySelector(nn.Module):
             mask_per_image = []
             has_vision_query = []
             for label, loc_map in zip(label_list, location_map):
+                """ Jie
+                label (int): label id?
+                loc_map (1D torch.tensor): where each element is the weight for each text token belong to a label, 
+                                           total length 256 (text input lenfgth?)
+                """
                 loc_map = loc_map.to(self.device)
                 if self.cfg.VISION_QUERY.LEARNABLE_BANK:
                     candidate_queries=self.query_bank[str(label)]
