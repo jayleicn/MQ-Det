@@ -342,7 +342,7 @@ class GeneralizedVLRCNN_New(nn.Module):
         else:
             visual_features = self.backbone(images.tensors)
 
-        import ipdb; ipdb.set_trace() # Jie
+        # import ipdb; ipdb.set_trace() # Jie
         # query embedding
         if self.cfg.VISION_QUERY.ENABLED:
             if self.training:

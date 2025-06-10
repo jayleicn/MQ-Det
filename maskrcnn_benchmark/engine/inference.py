@@ -608,7 +608,7 @@ def inference(
                     '''
                     different datasets seem to have different data format... For LVIS dataset, the target is a dictionary, while for modulatedDataset such as COCO/Flickr, the target is a BoxList
                     '''
-
+                    import ipdb; ipdb.set_trace() # Jie
                     if task == "detection":
                         captions = [all_queries[query_i] for ii in range(len(targets))]
                         positive_map_label_to_token = all_positive_map_label_to_token[query_i]
