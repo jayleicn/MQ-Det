@@ -1,8 +1,5 @@
-import cv2
 import torch
-import re
-import numpy as np
-from typing import List, Union
+from torch import nn
 import nltk
 import inflect
 from transformers import AutoTokenizer
@@ -14,17 +11,12 @@ import pdb
 from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.utils.checkpoint import DetectronCheckpointer
 from maskrcnn_benchmark.structures.image_list import to_image_list
-from maskrcnn_benchmark.structures.boxlist_ops import boxlist_iou
 from maskrcnn_benchmark.structures.bounding_box import BoxList
-from maskrcnn_benchmark import layers as L
-from maskrcnn_benchmark.modeling.roi_heads.mask_head.inference import Masker
-from maskrcnn_benchmark.utils import cv2_util
 
 engine = inflect.engine()
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 
-import timeit
 import os
 
 
@@ -71,47 +63,37 @@ def create_positive_map(tokenized, tokens_positive):
     return positive_map / (positive_map.sum(-1)[:, None] + 1e-6)
 
 
-def _post_process(predictions, threshold=0.5):
-    # copied GLIP_DEMO
-    scores = predictions.get_field("scores")
-    labels = predictions.get_field("labels").tolist()
-    thresh = scores.clone()
-    for i, lb in enumerate(labels):
-        thresh[i] = threshold
-    keep = torch.nonzero(scores > thresh).squeeze(1)
-    predictions = predictions[keep]
-
-    scores = predictions.get_field("scores")
-    _, idx = scores.sort(0, descending=True)
-    return predictions[idx]
-
-
-class MQGLIPDemo(object):
+class MQGLIPDemo(nn.Module):
     def __init__(self,
                  cfg,
-                 confidence_threshold=0.7,
                  min_image_size=800,
                  model=None,
+                 device=None
                  ):
+        super(MQGLIPDemo, self).__init__()
         self.cfg = cfg.clone()
         self.color = 255 
         self.min_image_size = min_image_size
         self.cpu_device = torch.device("cpu")
-        self.device = torch.device(cfg.MODEL.DEVICE)
+        if device is None:
+            device = torch.device(cfg.MODEL.DEVICE)
+        self.device = device
         
-        if model is None:
-            self.model = build_detection_model(cfg)
-            self.model.eval()
-            self.model.to(self.device)
-            checkpointer = DetectronCheckpointer(
-                cfg, self.model, save_dir=cfg.OUTPUT_DIR)
-            _ = checkpointer.load(cfg.MODEL.WEIGHT)
-        else:
-            self.model = model     
+        self.model = self.prepare_model(model, cfg)
 
         self.tokenizer = self.build_tokenizer()
         self.transforms = self.build_transform()
-        
+
+    def prepare_model(self, model, cfg):
+        if model is None:
+            model = build_detection_model(cfg)
+            checkpointer = DetectronCheckpointer(
+                cfg, model, save_dir=cfg.OUTPUT_DIR)
+            _ = checkpointer.load(cfg.MODEL.WEIGHT)
+        model.eval()
+        model.to(self.device)            
+        return model          
+
     def build_transform(self):
         """
         Creates a basic transformation that was used to train the models
@@ -212,30 +194,9 @@ class MQGLIPDemo(object):
         image = self.transforms(original_image)
         image_list = to_image_list(image, self.cfg.DATALOADER.SIZE_DIVISIBILITY)
         image_list = image_list.to(self.device)
-        return image_list    
-    
-    def compute_prediction(self, original_image, original_caption):
-        """
-        original_image: np.array
-        original_caption: List(str) where each element str is a text label
-        """
-        image_list = self.prepare_image(original_image)
-        positive_map, positive_map_label_to_token = self.prepare_caption(original_caption)
-        
-        # compute predictions
-        with torch.no_grad():
-            predictions = self.model(image_list, captions=[original_caption], positive_map=positive_map_label_to_token)
-            predictions = [o.to(self.cpu_device) for o in predictions]
+        return image_list
 
-        # always single image is passed at a time
-        prediction = predictions[0]
-
-        # reshape prediction (a BoxList) into the original image size
-        height, width = original_image.shape[:-1]
-        prediction = prediction.resize((width, height))        
-        return prediction
-
-    def run_model_inference_forward(
+    def forward(
         self, 
         images, 
         targets=None, 
@@ -274,19 +235,6 @@ class MQGLIPDemo(object):
             vision_inputs_in_language_backbone = self.get_vision_inputs_for_language_backbone(
                 visual_features, positive_map, prompt_boxes, image_size=images.tensors.shape[-2:], box_mode=prompt_box_mode
             )
-            # batched_labels_in_caption = [labels_in_caption]
-            # batched_all_map = [all_map]
-            # batched_pos_labels = None
-
-            # query_features, query_attetion_masks, _ = \
-            #     self.model.query_selector(batched_labels_in_caption, batched_all_map, batched_pos_labels)
-
-            # vision_inputs_in_language_backbone={
-            #     'vision': query_features,
-            #     'images': self.model.flatten_fpn_features(visual_features), 
-            #     'vision_attention_mask': query_attetion_masks, 
-            #     'batched_pos_category_map': None
-            #     }
         else:
             vision_inputs_in_language_backbone={
                 'vision': None, 
