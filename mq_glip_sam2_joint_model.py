@@ -103,6 +103,18 @@ class MQGLIPSam2JointModel(nn.Module):
                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
                 for i, out_obj_id in enumerate(out_obj_ids)
             }
+        # the propagate_in_video will not process the frames before grounding_frame_idx
+        # so we need a reverse loop to fill in the missing frames
+        if grounding_frame_idx != 0:
+            for out_frame_idx, out_obj_ids, out_mask_logits in self.sam2_predictor.propagate_in_video(
+                    inference_state,
+                    reverse=True
+                ):
+                video_segments[out_frame_idx] = {
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                    for i, out_obj_id in enumerate(out_obj_ids)
+                }            
+            
         # TODO: add image grounding scores to the video_segments as the video-level score?
         return video_segments
         
@@ -128,17 +140,17 @@ class MQGLIPSam2JointModel(nn.Module):
         original_image = self.mq_glip_model.load_image(image_path)
         
         # Prepare the image
-        image_list = self.mq_glip_model.prepare_image(original_image)
+        image_list = self.mq_glip_model.prepare_image(np.array(original_image))
         
         # Prepare the caption
-        positive_map, _ = self.mq_glip_model.prepare_caption(text_prompt)
+        _, positive_map_label_to_token = self.mq_glip_model.prepare_caption([text_prompt, ])
         
         # Run MQ-GLIP model
         vision_enabled = True if box_prompt is not None else False
         preds = self.mq_glip_model(
             images=image_list,
-            captions=[text_prompt],
-            positive_map=positive_map,
+            captions=[text_prompt, ],
+            positive_map=positive_map_label_to_token,
             prompt_boxes=box_prompt,
             vision_enabled=vision_enabled,
             prompt_box_mode=box_prompt_mode
