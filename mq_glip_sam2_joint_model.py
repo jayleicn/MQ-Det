@@ -2,13 +2,16 @@ import torch
 from torch import nn
 import numpy as np
 from mq_glip_demo import MQGLIPDemo
-from typing import List
+from typing import List, Union, Optional
+import PIL
 
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../sam2')))
 # from ..sam2.sam2.build_sam import build_sam2_video_predictor
 from sam2.build_sam import build_sam2_video_predictor
+from onevision.utils.rle import rle_encode, robust_rle_encode
+from onevision.models.detr.video_tracking_with_prompt_utils import mask_to_box
 
 
 class MQGLIPSam2JointModel(nn.Module):
@@ -32,7 +35,7 @@ class MQGLIPSam2JointModel(nn.Module):
             sam2_model_config, sam2_checkpoint, device=self.device
         )
     
-    def forward(
+    def forward_single_prompt(
         self, 
         text_prompt: str, 
         box_prompt: List[List[int]], 
@@ -42,8 +45,8 @@ class MQGLIPSam2JointModel(nn.Module):
     ):
         """
         text_prompt: str, the text prompt for MQ-GLIP
-        box_prompt: List[List[int]], each inner list is a bounding box with 4 coordinates, 
-            formatted as xyxy, indicated by `box_prompt_mode`
+        box_prompt: List[Box], each Box is a list of 4 floats denoting a bounding box with 4 coordinates, 
+            formatted indicated by `box_prompt_mode`
         video_dir: str, path to the video
         frame_idx_to_run_image_grounding: int, the index of the frame to run image grounding
         box_prompt_mode: str, the format of the prompt boxes, either "xywh" or "xyxy"
@@ -69,11 +72,77 @@ class MQGLIPSam2JointModel(nn.Module):
             "video_frame_paths": video_frame_paths
         }
 
-    def run_sam2_tracking(self, video_dir, grounding_results, grounding_frame_idx):
+    def forward(
+            self, 
+            text_prompt_list: List[str],
+            box_prompt_list: List[List[List[float]]], 
+            video_dir_or_loaded_frames: Union[str, List[PIL.Image.Image]], 
+            frame_idx_to_run_image_grounding: int = 0,
+            box_prompt_mode: str = "xyxy",
+            text_prompt_ids: Optional[List[int]] = None
+        ):
+        """
+        Run MQ-GLIP and SAM2 for multiple text and box prompts pairs.
+        
+        text_prompt_list: List[str], list of text prompts for MQ-GLIP
+        box_prompt_list: List[List[Box]], each Box is a list of 4 floats denoting a bounding box with 4 coordinates, 
+            formatted indicated by `box_prompt_mode`
+        video_dir: str, path to the video
+        box_prompt_mode: str, the format of the prompt boxes, either "xywh" or "xyxy"
+        """
+        assert len(text_prompt_list) == len(box_prompt_list), "text_prompt_list and box_prompt_list must have the same length"
+        # setup data
+        if isinstance(video_dir_or_loaded_frames, str):
+            video_frame_paths = self.get_frame_paths(video_dir_or_loaded_frames)
+            # Load the image
+            video_frames = [self.mq_glip_model.load_image(p) for p in video_frame_paths]
+        else:
+            video_frames = video_dir_or_loaded_frames
+        
+        # Run image grounding for each pair of text-box prompt
+        prompt_id2obj_ids = {} # keep note of which boxes belong to which prompts
+        grounding_results = {"bbox": [], "scores": [], "labels": []}
+        image_for_grounding = video_frames[frame_idx_to_run_image_grounding]
+        prompt_ids = text_prompt_ids if text_prompt_ids is not None else list(range(len(text_prompt_list)))
+        for prompt_id, text_prompt, box_prompt in zip(prompt_ids, text_prompt_list, box_prompt_list):
+            _grounding_results = self.run_image_grounding(
+                image_for_grounding, 
+                text_prompt, 
+                box_prompt=box_prompt, 
+                box_prompt_mode=box_prompt_mode
+            )
+            st, cur_len = len(grounding_results["bbox"]), len(_grounding_results["bbox"])
+            prompt_id2obj_ids[prompt_id] = list(range(st, st + cur_len))
+            grounding_results["labels"].extend([prompt_id] * cur_len)
+            grounding_results["bbox"].extend(_grounding_results["bbox"])
+            grounding_results["scores"].extend(_grounding_results["scores"])
+
+        # Run SAM2 with the detected boxes
+        tracking_results = self.run_sam2_tracking(
+            video_frames, 
+            grounding_results, 
+            grounding_frame_idx=frame_idx_to_run_image_grounding
+        )
+        return {
+            "grounding_results": grounding_results,
+            "tracking_results": tracking_results,
+            "video_frames": video_frames,
+            "prompt_id2obj_ids": prompt_id2obj_ids
+        }
+        
+    def prepare_results_in_sam3_eval_format(self, results):
+        preds = {} # ['scores', 'labels', 'boxes', 'masks_rle', 'per_frame_scores']
+        preds["scores"] = torch.tensor(results["grounding_results"]["scores"], device=self.device) # (n_tracklet,)
+        preds["labels"] = torch.tensor(results["grounding_results"]["labels"], device=self.device) # (n_tracklet,)
+        # masks
+        # boxes
+        return preds
+
+    def run_sam2_tracking(self, video_path_or_load_frames, grounding_results, grounding_frame_idx, mask_to_numpy=True):
         """
         Run SAM2 tracking on the video frames using the detected boxes from MQ-GLIP.
         
-        video_dir: str, path to the video
+        video_path_or_load_frames: str path to the video or List[PIL.Image.Image] in RGB mode, 
         grounding_results: dict, results from MQ-GLIP containing 'bbox' and 'scores'
         grounding_frame_idx: int, the index of the frame where the grounding results were obtained
         
@@ -85,7 +154,9 @@ class MQGLIPSam2JointModel(nn.Module):
             return {}
 
         # has boxes
-        inference_state = self.sam2_predictor.init_state(video_path=video_dir)
+        inference_state = self.sam2_predictor.init_state(
+            video_path_or_load_frames=video_path_or_load_frames
+        )
         # segment object with box prompt
         for obj_id, box in enumerate(grounding_results['bbox']):
             box = np.array(box, dtype=np.float32)
@@ -111,22 +182,27 @@ class MQGLIPSam2JointModel(nn.Module):
                     reverse=True
                 ):
                 video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() if mask_to_numpy else out_mask_logits[i]
                     for i, out_obj_id in enumerate(out_obj_ids)
-                }            
-            
-        # TODO: add image grounding scores to the video_segments as the video-level score?
+                }
+
         return video_segments
         
-        
-    def run_image_grounding(self, image_path, text_prompt, box_prompt=None, box_prompt_mode="xyxy"):
+
+    def run_image_grounding(
+            self, 
+            original_image: PIL.Image.Image, 
+            text_prompt: str, 
+            box_prompt: List[List[float]]=None, 
+            box_prompt_mode: str ="xyxy"
+        ):
         """
         Run image grounding on a single image.
         
-        image_path: str, path to the image
+        original_image: original Image
         text_prompt: str, the text prompt for MQ-GLIP
-        box_prompt: List[List[int]], each inner list is a bounding box with 4 coordinates,
-            formatted as xyxy, indicated by `box_prompt_mode`        
+        box_prompt: List[Box], each Box is a list of 4 floats denoting a bounding box with 4 coordinates, 
+            formatted indicated by `box_prompt_mode`
         box_prompt_mode: str, the format of the prompt boxes, either "xywh" or "xyxy"
         
         Returns:
@@ -135,10 +211,7 @@ class MQGLIPSam2JointModel(nn.Module):
                 formatted as xyxy, indicating the detected boxes in the image. May be empty if no
                 boxes are detected.
                 - scores: List[float], the scores of the detected boxes.
-        """
-        # Load the image
-        original_image = self.mq_glip_model.load_image(image_path)
-        
+        """        
         # Prepare the image
         image_list = self.mq_glip_model.prepare_image(np.array(original_image))
         
