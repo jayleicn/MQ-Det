@@ -73,24 +73,28 @@ class MQGLIPSam2JointModel(nn.Module):
         }
 
     def forward(
-            self, 
-            text_prompt_list: List[str],
-            box_prompt_list: List[List[List[float]]], 
-            video_dir_or_loaded_frames: Union[str, List[PIL.Image.Image]], 
-            frame_idx_to_run_image_grounding: int = 0,
-            box_prompt_mode: str = "xyxy",
-            text_prompt_ids: Optional[List[int]] = None
+        self, 
+        text_prompt_list: List[str],
+        video_dir_or_loaded_frames: Union[str, List[PIL.Image.Image]], 
+        frame_idx_to_run_image_grounding: int = 0,
+        box_prompt_mode: str = "xyxy",
+        box_prompt_list: Optional[List[List[List[float]]]] = None, 
+        text_prompt_ids: Optional[List[int]] = None
         ):
         """
         Run MQ-GLIP and SAM2 for multiple text and box prompts pairs.
         
         text_prompt_list: List[str], list of text prompts for MQ-GLIP
-        box_prompt_list: List[List[Box]], each Box is a list of 4 floats denoting a bounding box with 4 coordinates, 
+        box_prompt_list: List[List[Box]] or None, each Box is a list of 4 floats denoting a bounding box with 4 coordinates, 
             formatted indicated by `box_prompt_mode`
         video_dir: str, path to the video
         box_prompt_mode: str, the format of the prompt boxes, either "xywh" or "xyxy"
         """
-        assert len(text_prompt_list) == len(box_prompt_list), "text_prompt_list and box_prompt_list must have the same length"
+        if box_prompt_list is not None:
+            assert len(text_prompt_list) == len(box_prompt_list), \
+                "text_prompt_list and box_prompt_list must have the same length"
+        else:
+            box_prompt_list = [None] * len(text_prompt_list)
         # setup data
         if isinstance(video_dir_or_loaded_frames, str):
             video_frame_paths = self.get_frame_paths(video_dir_or_loaded_frames)
@@ -134,11 +138,37 @@ class MQGLIPSam2JointModel(nn.Module):
         preds = {} # ['scores', 'labels', 'boxes', 'masks_rle', 'per_frame_scores']
         preds["scores"] = torch.tensor(results["grounding_results"]["scores"], device=self.device) # (n_tracklet,)
         preds["labels"] = torch.tensor(results["grounding_results"]["labels"], device=self.device) # (n_tracklet,)
-        # masks
-        # boxes
+        preds["masks_rle"], preds["boxes"] = self.collect_masks_in_batch(results["tracking_results"]) 
         return preds
 
-    def run_sam2_tracking(self, video_path_or_load_frames, grounding_results, grounding_frame_idx, mask_to_numpy=True):
+    def collect_masks_in_batch(self, sam2_video_segments):
+        """
+        sam2_video_segments
+            sam2_video_segments.keys(): frame indices
+            sam2_video_segments[0].keys(): object ids
+            sam2_video_segments[0][0].shape: e.g., (1, 540, 960)
+            sam2_video_segments[0][0].dtype: dtype('bool')
+            type(video_segments[0][0]): torch.tensor
+
+        output:
+        
+        """
+        object_ids = list(sam2_video_segments[0].keys())
+        object_id2masks = {k: [] for k in object_ids}
+        for frame_idx in range(len(sam2_video_segments)):
+            for obj_id, mask in sam2_video_segments[frame_idx].items():
+                object_id2masks[obj_id].append(mask)
+        
+        masks_rle = []
+        boxes = []
+        for obj_id in sorted(object_ids):
+            masklet = torch.concat(object_id2masks[obj_id], 0) # (n_frames, H, W)
+            masks_rle.append(rle_encode(masklet, return_areas=True)) # element is List[rle_dict]
+            boxes.append(mask_to_box(masklet.unsqueeze(1)).squeeze()) # element shape (n_frames, 4), xyxy format
+        boxes = torch.stack(boxes, dim=0) # (n_obj, n_frames, 4)
+        return masks_rle, boxes
+
+    def run_sam2_tracking(self, video_path_or_load_frames, grounding_results, grounding_frame_idx, mask_to_numpy=False):
         """
         Run SAM2 tracking on the video frames using the detected boxes from MQ-GLIP.
         
@@ -168,12 +198,17 @@ class MQGLIPSam2JointModel(nn.Module):
             )
         
         # run propagation throughout the video and collect the results in a dict
+        def _convert_mask(mask_logits, to_numpy):
+            binary_mask = mask_logits > 0.0
+            return binary_mask.cpu().numpy() if to_numpy else binary_mask    
+              
         video_segments = {}  # video_segments contains the per-frame segmentation results
         for out_frame_idx, out_obj_ids, out_mask_logits in self.sam2_predictor.propagate_in_video(inference_state):
             video_segments[out_frame_idx] = {
-                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                out_obj_id: _convert_mask(out_mask_logits[i], mask_to_numpy)
                 for i, out_obj_id in enumerate(out_obj_ids)
             }
+
         # the propagate_in_video will not process the frames before grounding_frame_idx
         # so we need a reverse loop to fill in the missing frames
         if grounding_frame_idx != 0:
@@ -182,12 +217,10 @@ class MQGLIPSam2JointModel(nn.Module):
                     reverse=True
                 ):
                 video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() if mask_to_numpy else out_mask_logits[i]
+                    out_obj_id: _convert_mask(out_mask_logits[i], mask_to_numpy)
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-
-        return video_segments
-        
+        return video_segments      
 
     def run_image_grounding(
             self, 
