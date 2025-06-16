@@ -67,30 +67,35 @@ class MQGLIPDemo(nn.Module):
                  cfg,
                  min_image_size=800,
                  model=None,
-                 device=None
+                 device="cuda"
                  ):
         super(MQGLIPDemo, self).__init__()
         self.cfg = cfg.clone()
         self.color = 255 
         self.min_image_size = min_image_size
         self.cpu_device = torch.device("cpu")
-        if device is None:
-            device = torch.device(cfg.MODEL.DEVICE)
-        self.device = device
+        # if device is None:
+        #     device = torch.device(cfg.MODEL.DEVICE)
+        # self.device = device
         
-        self.model = self.prepare_model(model, cfg)
+        self.model = self.prepare_model(model, cfg, device=device)
 
         self.tokenizer = self.build_tokenizer()
         self.transforms = self.build_transform()
 
-    def prepare_model(self, model, cfg):
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def prepare_model(self, model, cfg, device="cuda", mode="eval"):
         if model is None:
             model = build_detection_model(cfg)
             checkpointer = DetectronCheckpointer(
                 cfg, model, save_dir=cfg.OUTPUT_DIR)
             _ = checkpointer.load(cfg.MODEL.WEIGHT)
-        model.eval()
-        model.to(self.device)            
+        if mode == "eval":
+            model.eval()
+        model = model.to(device)
         return model          
 
     def build_transform(self):
