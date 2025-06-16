@@ -39,7 +39,6 @@ def create_positive_map(tokenized, tokens_positive):
             except Exception as e:
                 print("beg:", beg, "end:", end)
                 print("token_positive:", tokens_positive)
-                # print("beg_pos:", beg_pos, "end_pos:", end_pos)
                 raise e
             if beg_pos is None:
                 try:
@@ -157,13 +156,8 @@ class MQGLIPDemo(nn.Module):
             tokens_positive = [tokens_positive]
 
             original_caption = caption_string
-            print(tokens_positive)
         else:
             raise NotImplementedError
-            # tokenized = self.tokenizer([original_caption], return_tensors="pt")
-            # if custom_entity is None:
-            #     tokens_positive = self.run_ner(original_caption)
-            # print(tokens_positive)
 
         # process positive map
         positive_map = create_positive_map(tokenized, tokens_positive)
@@ -246,7 +240,6 @@ class MQGLIPDemo(nn.Module):
         # language embedding
         language_dict_features = {}
         if captions is not None:
-            #print(captions[0])
             tokenized = self.model.tokenizer.batch_encode_plus(captions,
                                                         max_length=self.model.cfg.MODEL.LANGUAGE_BACKBONE.MAX_QUERY_LEN,
                                                         padding='max_length' if self.model.cfg.MODEL.LANGUAGE_BACKBONE.PAD_MAX else "longest",
@@ -318,7 +311,6 @@ class MQGLIPDemo(nn.Module):
         )
         query_features = self.extract_visual_prompt_feature(visual_features, boxes, image_size, box_mode="xyxy")
         query_attetion_masks = self.create_attention_map(len(boxes), all_map) 
-        print(f"query_features.shape {query_features.shape}, query_attetion_masks.shape {query_attetion_masks.shape}")
         
         vision_inputs_in_language_backbone={
             'vision': query_features,
@@ -327,19 +319,6 @@ class MQGLIPDemo(nn.Module):
             'batched_pos_category_map': None
             }
         return vision_inputs_in_language_backbone
-
-    def deprecated_convert_boxes_mode(self, boxes, image_size, convert_to="xyxy"):
-        """"
-        boxes: List[List[int]] where each box is a list of 4 coordinates
-        
-        using BoxList to convert it to the desired mode
-        """
-        modes = ["xywh", "xyxy"]
-        current_mode = [e for e in modes if e != convert_to][0]
-        print(f"Assuming current mode is {current_mode}, converting to {convert_to}")
-        boxes = torch.as_tensor(boxes).reshape(-1, 4)
-        boxes = BoxList(boxes, image_size, mode=current_mode).convert(convert_to)
-        return boxes.bbox.tolist()
 
     def _post_process(self, predictions, threshold=0.5):
         # copied GLIP_DEMO

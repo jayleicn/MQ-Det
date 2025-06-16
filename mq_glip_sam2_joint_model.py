@@ -244,7 +244,7 @@ class MQGLIPSam2JointModel(nn.Module):
                 formatted as xyxy, indicating the detected boxes in the image. May be empty if no
                 boxes are detected.
                 - scores: List[float], the scores of the detected boxes.
-        """        
+        """
         # Prepare the image
         image_list = self.mq_glip_model.prepare_image(np.array(original_image))
         
